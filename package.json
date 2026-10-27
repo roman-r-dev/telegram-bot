@@ -1,0 +1,19 @@
+{
+  "name": "beauty-salon-bot",
+  "version": "1.0.0",
+  "description": "Professional Telegram Bot for Beauty Salon",
+  "main": "src/index.js",
+ 
+  "scripts": {
+    "dev": "nodemon src/index.js",
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "grammy": "^1.21.1",
+    "better-sqlite3": "^11.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
