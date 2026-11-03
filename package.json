@@ -3,15 +3,15 @@
   "version": "1.0.0",
   "description": "Professional Telegram Bot for Beauty Salon",
   "main": "src/index.js",
- 
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js"
   },
   "dependencies": {
+    "@grammyjs/conversations": "^2.1.1",
+    "better-sqlite3": "^11.0.0",
     "dotenv": "^16.4.5",
-    "grammy": "^1.21.1",
-    "better-sqlite3": "^11.0.0"
+    "grammy": "^1.21.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"

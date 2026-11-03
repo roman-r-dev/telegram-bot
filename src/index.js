@@ -34,7 +34,7 @@ bot.use(conversations());
 bot.use(createConversation(bookingConversation));
 
 // Обработка команды /start с записью пользователя в SQLite
-bot.command('start', (ctx) => {
+bot.command('start', async (ctx) => {
     const telegramId = ctx.from.id;
     const username = ctx.from.username || null;
     const firstName = ctx.from.first_name;
@@ -50,7 +50,7 @@ bot.command('start', (ctx) => {
             .resized(); // Делает кнопку компактной, а не огромной
 
         // Отвечаем пользователю и прикрепляем клавиатуру
-        ctx.reply(
+        await.ctx.reply(
             `Привет, ${firstName}! Добро пожаловать в наш Салон Красоты. ✨\n\n` +
             `База данных успешно сохранила твой профиль. Нажми на кнопку ниже, чтобы записаться!`, 
             { reply_markup: mainMenu }
