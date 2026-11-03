@@ -2,7 +2,7 @@
 const db = require('../config/database');
 
 /**
- * Пошаговый сценарий записи на услугу (Часть 1: Вывод услуг)
+ * Пошаговый сценарий записи на услугу
  */
 async function bookingConversation(conversation, ctx) {
     try {
@@ -21,13 +21,29 @@ async function bookingConversation(conversation, ctx) {
 
         // 4. Перебираем все услуги из базы данных и для каждой создаем кнопку
         services.forEach((service) => {
-            // Текст на кнопке: "Стрижка (1500₽)"
-            // Callback_data, которая отправится боту при нажатии: "service_1", "service_2" и т.д.
             keyboard.text(`${service.name} (${service.price}₽)`, `service_${service.id}`).row();
         });
 
         // 5. Отправляем пользователю сообщение и прикрепляем наши динамические кнопки
         await ctx.reply('✨ Выберите желаемую услугу из списка:', { reply_markup: keyboard });
+
+        // === ВОТ ЭТОГО ШАГА НЕ ХВАТАЛО ===
+        // 6. Заставляем бота ОСТАНОВИТЬСЯ и ждать, пока пользователь нажмет на инлайн-кнопку
+        const clickContext = await conversation.wait();
+
+        // Проверяем, что пользователь нажал именно на инлайн-кнопку (callback_query)
+        if (clickContext.callbackQuery) {
+            const selectedServiceData = clickContext.callbackQuery.data; // Получим строку вида "service_1"
+            
+            // Отвечаем Telegram, что клик принят (чтобы кнопка перестала "мигать" часиками)
+            await clickContext.answerCallbackQuery();
+            
+            // Временно выведем в чат то, что выбрал пользователь, чтобы проверить работу
+            await clickContext.reply(`Отлично! Вы выбрали услугу с кодом: ${selectedServiceData}`);
+        } else {
+            // Если пользователь вместо клика по кнопке просто прислал текст или картинку
+            await clickContext.reply('Пожалуйста, выберите услугу, нажав на одну из кнопок под сообщением.');
+        }
 
     } catch (error) {
         console.error('Ошибка внутри сценария записи:', error);
