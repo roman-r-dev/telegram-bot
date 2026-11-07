@@ -54,10 +54,16 @@ bot.command('start', async (ctx) => {
         await UserModel.upsertUser(telegramId, username, firstName);
         console.log(`[Bot] Пользователь ${firstName} (${telegramId}) успешно обработан в БД.`);
         
+        // Модификация: Если зашел админ — даем ему админскую кнопку в меню
         const mainMenu = new Keyboard()
             .text('📅 Записаться на услугу')
-            .text('🗂 Мои записи')
-            .resized(); 
+            .text('🗂 Мои записи');
+            
+        if (isAdmin(ctx)) {
+            mainMenu.row().text('🗓 Расписание на сегодня');
+        }
+
+        mainMenu.resized();
 
         await ctx.reply(
             `Привет, ${firstName}! Добро пожаловать в наш Салон Красоты. ✨\n\n` +
@@ -120,7 +126,7 @@ bot.hears('🗂 Мои записи', async (ctx) => {
             );
         }
     } catch (error) {
-        console.error('Ошибка при получить записи:', error);
+        console.error('Ошибка при получении записей пользователя:', error);
         await ctx.reply('⚠️ Не удалось загрузить ваши записи. Пожалуйста, попробуйте позже.');
     }
 });
@@ -139,6 +145,56 @@ bot.callbackQuery(/^cancel_app_\d+$/, async (ctx) => {
 });
 // --- ХЭНДЛЕРЫ АДМИНИСТРАТОРА ---
 
+// НОВЫЙ МОДУЛЬ: Просмотр актуального расписания салона на сегодня
+bot.hears('🗓 Расписание на сегодня', async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.reply('⚠️ Доступ ограничен. Вы не являетесь администратором.');
+
+    try {
+        // 1. Получаем текущую дату сервера в формате YYYY-MM-DD (с учетом МСК)
+        const nowMsk = getTargetDateTimeString(3);
+        const todayDate = nowMsk.split(' ')[0]; // Вытаскиваем строго "YYYY-MM-DD"
+        const displayToday = todayDate.split('-').reverse().join('.'); // Делаем "ДД.ММ.ГГГГ" для текста
+
+        // 2. Делаем SQL-запрос ко всем подтвержденным записям на сегодня
+        const todaySchedule = db.prepare(`
+            SELECT a.appointment_date, s.name AS service_name, s.price, u.first_name, u.username
+            FROM appointments a
+            JOIN services s ON a.service_id = s.id
+            JOIN users u ON a.user_id = u.telegram_id
+            WHERE a.appointment_date LIKE ? AND a.status = 'confirmed'
+            ORDER BY a.appointment_date ASC
+        `).all(`${todayDate}%`);
+
+        if (todaySchedule.length === 0) {
+            return await ctx.reply(`📅 <b>Расписание на сегодня (${displayToday}):</b>\n\n📭 Подтвержденных записей на сегодня пока нет. Все новые заявки можно проверить через команду /admin.`);
+        }
+
+        // 3. Формируем красивый структурированный отчет для админа
+        let reportText = `📅 <b>Расписание визитов на сегодня (${displayToday}):</b>\n\n`;
+        let totalEarnings = 0;
+
+        todaySchedule.forEach((app, index) => {
+            const [, rawTime] = app.appointment_date.split(' ');
+            const clientUser = app.username ? `@${app.username}` : 'нет юзернейма';
+            
+            reportText += `${index + 1}. 🕒 <b>${rawTime}</b> — <b>${app.service_name}</b>\n`;
+            reportText += `   👤 Клиент: ${app.first_name} (${clientUser})\n`;
+            reportText += `   💰 Стоимость: ${app.price} ₽\n\n`;
+            
+            totalEarnings += app.price;
+        });
+
+        reportText += `📈 <b>Итого за сегодня:</b> ${totalEarnings} ₽`;
+
+        await ctx.reply(reportText, { parse_mode: 'HTML' });
+
+    } catch (error) {
+        console.error('Ошибка при формировании расписания для админа:', error);
+        await ctx.reply('⚠️ Не удалось загрузить расписание. Пожалуйста, проверьте консоль.');
+    }
+});
+
+// Просмотр новых заявок, ожидающих модерации (статус 'pending')
 bot.command('admin', async (ctx) => {
     if (!isAdmin(ctx)) return ctx.reply('⚠️ Доступ ограничен. Вы не являетесь администратором.');
 
