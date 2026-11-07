@@ -54,7 +54,6 @@ bot.command('start', async (ctx) => {
         await UserModel.upsertUser(telegramId, username, firstName);
         console.log(`[Bot] Пользователь ${firstName} (${telegramId}) успешно обработан в БД.`);
         
-        // Модификация: Если зашел админ — даем ему админскую кнопку в меню
         const mainMenu = new Keyboard()
             .text('📅 Записаться на услугу')
             .text('🗂 Мои записи');
@@ -145,15 +144,17 @@ bot.callbackQuery(/^cancel_app_\d+$/, async (ctx) => {
 });
 // --- ХЭНДЛЕРЫ АДМИНИСТРАТОРА ---
 
-// НОВЫЙ МОДУЛЬ: Просмотр актуального расписания салона на сегодня
+// Просмотр актуального расписания салона на сегодня
 bot.hears('🗓 Расписание на сегодня', async (ctx) => {
     if (!isAdmin(ctx)) return ctx.reply('⚠️ Доступ ограничен. Вы не являетесь администратором.');
 
     try {
         // 1. Получаем текущую дату сервера в формате YYYY-MM-DD (с учетом МСК)
         const nowMsk = getTargetDateTimeString(3);
-        const todayDate = nowMsk.split(' ')[0]; // Вытаскиваем строго "YYYY-MM-DD"
-        const displayToday = todayDate.split('-').reverse().join('.'); // Делаем "ДД.ММ.ГГГГ" для текста
+        
+        // ИСПРАВЛЕНО: Корректно извлекаем чистую строку даты из сплита по пробелу
+        const todayDate = nowMsk.split(' ')[0]; 
+        const displayToday = todayDate.split('-').reverse().join('.');
 
         // 2. Делаем SQL-запрос ко всем подтвержденным записям на сегодня
         const todaySchedule = db.prepare(`
@@ -166,7 +167,7 @@ bot.hears('🗓 Расписание на сегодня', async (ctx) => {
         `).all(`${todayDate}%`);
 
         if (todaySchedule.length === 0) {
-            return await ctx.reply(`📅 <b>Расписание на сегодня (${displayToday}):</b>\n\n📭 Подтвержденных записей на сегодня пока нет. Все новые заявки можно проверить через команду /admin.`);
+            return await ctx.reply(`📅 <b>Расписание на сегодня (${displayToday}):</b>\n\n📭 Подтвержденных записей на сегодня пока нет. Все новые заявки можно проверить через команду /admin.`, { parse_mode: 'HTML' });
         }
 
         // 3. Формируем красивый структурированный отчет для админа
@@ -174,7 +175,8 @@ bot.hears('🗓 Расписание на сегодня', async (ctx) => {
         let totalEarnings = 0;
 
         todaySchedule.forEach((app, index) => {
-            const [, rawTime] = app.appointment_date.split(' ');
+            const dateTime = app.appointment_date || '';
+            const rawTime = dateTime.split(' ')[1] || '00:00';
             const clientUser = app.username ? `@${app.username}` : 'нет юзернейма';
             
             reportText += `${index + 1}. 🕒 <b>${rawTime}</b> — <b>${app.service_name}</b>\n`;
@@ -236,7 +238,7 @@ bot.command('admin', async (ctx) => {
         }
     } catch (error) {
         console.error('Ошибка в админ-панели:', error);
-        await ctx.reply('⚠️ Не удалось загрузить панель администратора.');
+        await ctx.reply('⚠️ Не удалось загрузить панели администратора.');
     }
 });
 
