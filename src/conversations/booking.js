@@ -20,7 +20,7 @@ async function bookingConversation(conversation, ctx) {
     try {
         const telegramId = ctx.from.id;
 
-        // --- ШАГ 1: ВЫБОР УСЛУГИ И ПРОВЕРКА НА СУЩЕСТВУЮЩУЮ ЗАПИСЬ ---
+        // --- ШАГ 1: ВЫБОР УСЛУГИ ---
         const services = await conversation.external(() => {
             return db.prepare('SELECT id, name, price FROM services').all();
         });
@@ -44,6 +44,7 @@ async function bookingConversation(conversation, ctx) {
             clickContext = await conversation.wait();
         }
 
+        // МГНОВЕННО ГАСИМ ЧАСИКИ НА КНОПКЕ УСЛУГИ
         await clickContext.answerCallbackQuery();
 
         const serviceData = clickContext.callbackQuery.data; 
@@ -56,7 +57,7 @@ async function bookingConversation(conversation, ctx) {
             return;
         }
 
-        // ПРОВЕРКА ДУБЛЕЙ: Ищем, есть ли у юзера активная запись на ЭТУ услугу
+        // ПРОВЕРКА ДУБЛЕЙ
         const existingApp = await conversation.external(() => {
             return db.prepare(`
                 SELECT id, appointment_date FROM appointments 
@@ -91,6 +92,7 @@ async function bookingConversation(conversation, ctx) {
                 actionContext = await conversation.wait();
             }
 
+            // МГНОВЕННО ГАСИМ ЧАСИКИ НА КНОПКЕ ПЕРЕНОСА
             await actionContext.answerCallbackQuery();
 
             if (actionContext.callbackQuery.data === 'action_cancel_flow') {
@@ -126,6 +128,7 @@ async function bookingConversation(conversation, ctx) {
             clickContext = await conversation.wait();
         }
 
+        // КРИТИЧЕСКОЕУЛУЧШЕНИЕ: Гасим «часики» даты ДО тяжелого запроса к SQLite!
         await clickContext.answerCallbackQuery();
         
         const selectedDate = clickContext.callbackQuery.data.replace('date_', ''); 
@@ -133,6 +136,7 @@ async function bookingConversation(conversation, ctx) {
 
 
         // --- ШАГ 3: ДИНАМИЧЕСКИЙ ВЫБОР ВРЕМЕНИ ---
+        // Запрос к БД на чтение занятых слотов
         const bookedAppointments = await conversation.external(() => {
             return db.prepare(`
                 SELECT appointment_date 
@@ -195,6 +199,7 @@ async function bookingConversation(conversation, ctx) {
             clickContext = await conversation.wait();
         }
 
+        // КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Гасим «часики» времени ДО сохранения данных в SQLite!
         await clickContext.answerCallbackQuery();
         const selectedTime = clickContext.callbackQuery.data.replace('time_', '');
 
@@ -224,6 +229,7 @@ async function bookingConversation(conversation, ctx) {
 
         await clickContext.editMessageText(`Вы выбрали время: *${selectedTime}*. Оформляю изменения... ⏳`, { parse_mode: 'Markdown', reply_markup: null });
 
+        // МГНОВЕННОЕ УВЕДОМЛЕНИЕ АДМИНИСТРАТОРА
         const adminId = parseInt(process.env.ADMIN_TELEGRAM_ID, 10);
         if (adminId && !isNaN(adminId)) {
             const clientName = ctx.from.first_name;
