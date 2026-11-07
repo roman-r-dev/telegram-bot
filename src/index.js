@@ -1,53 +1,58 @@
 require('dotenv').config();
 const { Bot, session, Keyboard, InlineKeyboard } = require('grammy'); 
 const { conversations, createConversation } = require('@grammyjs/conversations');
+const cron = require('node-cron');
 
-// Импортируем подключение к базе данных
 const db = require('./config/database');
 const { initDatabase, UserModel } = require('./models/user.model');
 const { bookingConversation } = require('./conversations/booking');
 
-// Проверяем токен бота
 if (!process.env.TELEGRAM_BOT_TOKEN) {
     console.error("Ошибка: Токен бота не найден в файле .env!");
     process.exit(1);
 }
 
-// Извлекаем ID администратора из .env
 const adminId = parseInt(process.env.ADMIN_TELEGRAM_ID, 10);
 
-// Запускаем инициализацию базы данных
 initDatabase();
 
-// Создаем экземпляр бота
 const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
 
-// Подключаем базовые сессии (необходимы для работы плагина разговоров)
 bot.use(session({
     initial: () => ({})
 }));
 
-// Подключаем плагин разговоров поверх сессий
 bot.use(conversations());
-
-// Регистрируем сценарий записи в боте
 bot.use(createConversation(bookingConversation));
 
-// Вспомогательная функция для проверки прав администратора
 function isAdmin(ctx) {
     return ctx.from && ctx.from.id === adminId;
 }
 
-// --- ХЭНДЛЕР: Команда /start ---
+function getTargetDateTimeString(offsetHours = 3) {
+    const now = new Date();
+    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const targetDate = new Date(utc + (3600000 * offsetHours));
+    
+    const YYYY = targetDate.getFullYear();
+    const MM = String(targetDate.getMonth() + 1).padStart(2, '0');
+    const DD = String(targetDate.getDate()).padStart(2, '0');
+    const HH = String(targetDate.getHours()).padStart(2, '0');
+    const mm = String(targetDate.getMinutes()).padStart(2, '0');
+    
+    return `${YYYY}-${MM}-${DD} ${HH}:${mm}`;
+}
+
+// --- ХЭНДЛЕРЫ КЛИЕНТА ---
+
 bot.command('start', async (ctx) => {
     const telegramId = ctx.from.id;
     const username = ctx.from.username || null;
     const firstName = ctx.from.first_name;
 
     try {
-        // Добавлен await на случай, если метод работы с БД асинхронный
         await UserModel.upsertUser(telegramId, username, firstName);
-        console.log(`[Bot] Пользователь ${firstName} (${telegramId}) успешно обработан в БД.`);
+        console.log(`[Bot] Пользователь ${firstName} (${telegramId}) успешно обработан in BD.`);
         
         const mainMenu = new Keyboard()
             .text('📅 Записаться на услугу')
@@ -65,12 +70,10 @@ bot.command('start', async (ctx) => {
     }
 });
 
-// --- ХЭНДЛЕР: Запуск пошавого бронирования ---
 bot.hears('📅 Записаться на услугу', async (ctx) => {
     await ctx.conversation.enter('bookingConversation');
 });
 
-// --- ХЭНДЛЕР: Просмотр записей клиентом ---
 bot.hears('🗂 Мои записи', async (ctx) => {
     const telegramId = ctx.from.id;
 
@@ -96,7 +99,6 @@ bot.hears('🗂 Мои записи', async (ctx) => {
         for (const app of appointments) {
             const statusSmile = app.status === 'confirmed' ? '✅ Подтверждена' : '⏳ В ожидании одобрения';
             
-            // Безопасное разделение даты на случай null/undefined в БД
             const dateStr = app.appointment_date || '';
             const [rawDate, rawTime] = dateStr.split(' ');
             const displayDate = rawDate ? rawDate.split('-').reverse().join('.') : 'Не указана';
@@ -123,23 +125,20 @@ bot.hears('🗂 Мои записи', async (ctx) => {
     }
 });
 
-// --- ХЭНДЛЕР: Отмена записи клиентом ---
 bot.callbackQuery(/^cancel_app_\d+$/, async (ctx) => {
     const appId = parseInt(ctx.callbackQuery.data.replace('cancel_app_', ''), 10);
 
     try {
         db.prepare("UPDATE appointments SET status = 'cancelled' WHERE id = ?").run(appId);
         await ctx.answerCallbackQuery('Запись успешно отменена!');
-        
-        // Убран parse_mode во избежание падения из-за отсутствия тегов в ctx.callbackQuery.message.text
         await ctx.editMessageText(ctx.callbackQuery.message.text + '\n\n🛑 Вы отменили этот визит.');
     } catch (error) {
         console.error('Ошибка при отмене записи в БД:', error);
         await ctx.answerCallbackQuery('Не удалось отменить запись.');
     }
 });
+// --- ХЭНДЛЕРЫ АДМИНИСТРАТОРА ---
 
-// --- ХЭНДЛЕР: Панель администратора /admin ---
 bot.command('admin', async (ctx) => {
     if (!isAdmin(ctx)) return ctx.reply('⚠️ Доступ ограничен. Вы не являетесь администратором.');
 
@@ -162,7 +161,6 @@ bot.command('admin', async (ctx) => {
         for (const app of pendingApps) {
             const clientUser = app.username ? `@${app.username}` : 'нет юзернейма';
             
-            // Безопасный split даты
             const dateStr = app.appointment_date || '';
             const [rawDate, rawTime] = dateStr.split(' ');
             const displayDate = rawDate ? rawDate.split('-').reverse().join('.') : 'Не указана';
@@ -186,7 +184,6 @@ bot.command('admin', async (ctx) => {
     }
 });
 
-// --- ХЭНДЛЕР: Одобрение записи администратором ---
 bot.callbackQuery(/^approve_app_\d+$/, async (ctx) => {
     if (!isAdmin(ctx)) return ctx.answerCallbackQuery('Отказано в доступе');
     const appId = parseInt(ctx.callbackQuery.data.replace('approve_app_', ''), 10);
@@ -215,7 +212,6 @@ bot.callbackQuery(/^approve_app_\d+$/, async (ctx) => {
     }
 });
 
-// --- ХЭНДЛЕР: Отклонение записи администратором ---
 bot.callbackQuery(/^reject_app_\d+$/, async (ctx) => {
     if (!isAdmin(ctx)) return ctx.answerCallbackQuery('Отказано в доступе');
     const appId = parseInt(ctx.callbackQuery.data.replace('reject_app_', ''), 10);
@@ -239,6 +235,49 @@ bot.callbackQuery(/^reject_app_\d+$/, async (ctx) => {
     }
 });
 
-// --- ЗАПУСК БОТА ---
+// --- СИСТЕМА НАПОМИНАНИЙ (CRON) ---
+
+cron.schedule('* * * * *', async () => {
+    try {
+        const nowMsk = getTargetDateTimeString(3);
+        const targetTime = new Date(nowMsk.replace(' ', 'T'));
+        targetTime.setHours(targetTime.getHours() + 2);
+
+        const YYYY = targetTime.getFullYear();
+        const MM = String(targetTime.getMonth() + 1).padStart(2, '0');
+        const DD = String(targetTime.getDate()).padStart(2, '0');
+        const HH = String(targetTime.getHours()).padStart(2, '0');
+        const mm = String(targetTime.getMinutes()).padStart(2, '0');
+        
+        const timeToSearch = `${YYYY}-${MM}-${DD} ${HH}:${mm}`;
+
+        const reminders = db.prepare(`
+            SELECT a.id, a.user_id, a.appointment_date, s.name AS service_name
+            FROM appointments a
+            JOIN services s ON a.service_id = s.id
+            WHERE a.appointment_date = ? AND a.status = 'confirmed'
+        `).all(timeToSearch);
+
+        for (const app of reminders) {
+            const [, rawTime] = app.appointment_date.split(' ');
+
+            await bot.api.sendMessage(
+                app.user_id,
+                `⏰ <b>Напоминание о визите!</b>\n\n` +
+                `Ждем вас сегодня через 2 часа в <b>${rawTime}</b> на услугу <b>${app.service_name}</b>. ✨\n\n` +
+                `Если ваши планы изменились, вы можете отменить запись в разделе «🗂 Мои записи».`,
+                { parse_mode: 'HTML' }
+            ).catch((err) => {
+                console.error(`[Cron] Не удалось отправить сообщение ${app.user_id}:`, err.message);
+            });
+            
+            console.log(`[Cron] Напоминание для записи ID ${app.id} успешно отправлено.`);
+        }
+    } catch (error) {
+        console.error('Ошибка фоновой задачи напоминаний:', error);
+    }
+});
+
+console.log('[Cron] Планировщик напоминаний запущен.');
 console.log('Бот успешно запускается в режиме разработки...');
 bot.start();

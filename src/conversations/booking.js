@@ -1,6 +1,4 @@
-// ====================================================================
-// 1. ИМПОРТЫ И НАСТРОЙКА ОКРУЖЕНИЯ
-// ====================================================================
+// 1. Все импорты строго на самом верху файла
 const { InlineKeyboard } = require('grammy');
 const db = require('../config/database');
 
@@ -15,9 +13,9 @@ function getTargetDate(offsetHours = 3) {
     return new Date(utc + (3600000 * offsetHours));
 }
 
-// ====================================================================
-// 2. ОСНОВНОЙ СЦЕНАРИЙ ПОШАГОВОГО БРОНИРОВАНИЯ
-// ====================================================================
+/**
+ * Пошаговый сценарий записи на услугу (Максимальная коммерческая версия со слотами)
+ */
 async function bookingConversation(conversation, ctx) {
     try {
         const telegramId = ctx.from.id;
@@ -93,6 +91,7 @@ async function bookingConversation(conversation, ctx) {
 
 
         // --- ШАГ 3: ДИНАМИЧЕСКИЙ ВЫБОР ВРЕМЕНИ (СЛОТЫ ВМЕСТО ТЕКСТА) ---
+        // 1. Получаем из БД уже занятые слоты на эту дату
         const bookedAppointments = await conversation.external(() => {
             return db.prepare(`
                 SELECT appointment_date 
@@ -101,45 +100,38 @@ async function bookingConversation(conversation, ctx) {
             `).all(`${selectedDate}%`);
         });
 
-        const busySlots = bookedAppointments.map(app => {
-            const dateTime = app.appointment_date || '';
-            const splitData = dateTime.split(' ');
-            return splitData[1] || ''; // Забираем чистую строку времени "HH:MM"
-        });
+        // Превращаем занятые записи "YYYY-MM-DD HH:MM" в простой массив занятого времени ["14:00", "16:00"]
+        const busySlots = bookedAppointments.map(app => app.appointment_date.split(' ')[1]);
 
+        // 2. Генерируем стандартный прайс-лист рабочих часов салона
         const allSalonSlots = ['10:00', '11:30', '13:00', '14:30', '16:00', '17:30', '19:00'];
         
         const timeKeyboard = new InlineKeyboard();
         let availableSlotsCount = 0;
 
         const nowTarget = getTargetDate(3);
-        const todayStr = nowTarget.toISOString().split('T')[0];
-        const isToday = selectedDate === todayStr;
+        const isToday = selectedDate === nowTarget.toISOString().split('T')[0];
 
         allSalonSlots.forEach((slotTime) => {
+            // Если этот слот уже занят кем-то в БД — пропускаем его
             if (busySlots.includes(slotTime)) return;
 
+            // Защита от записи "в прошлое", если клиент выбирает день "Сегодня"
             if (isToday) {
                 const [slotHours, slotMinutes] = slotTime.split(':').map(Number);
-                const currentHours = nowTarget.getHours();
-                const currentMinutes = nowTarget.getMinutes();
-
-                if (slotHours < currentHours || (slotHours === currentHours && slotMinutes <= currentMinutes)) {
+                if (slotHours < nowTarget.getHours() || (slotHours === nowTarget.getHours() && slotMinutes <= nowTarget.getMinutes())) {
                     return; 
                 }
             }
 
+            // Добавляем свободное время на клавиатуру (по 3 кнопки в ряд для компактности)
             timeKeyboard.text(slotTime, `time_${slotTime}`);
             availableSlotsCount++;
             if (availableSlotsCount % 3 === 0) timeKeyboard.row();
         });
 
         if (availableSlotsCount === 0) {
-            await clickContext.editMessageText(
-                `😔 К сожалению, на выбранную дату (<b>${displayDate}</b>) свободные места закончились или рабочее время салона вышло.\n\n` +
-                `Пожалуйста, начните сначала и выберите другой день.`, 
-                { parse_mode: 'HTML', reply_markup: null }
-            );
+            await clickContext.editMessageText(`😔 К сожалению, на дату *${displayDate}* все свободные места заняты или рабочее время салона вышло. Пожалуйста, начните сначала и выберите другой день.`, { parse_mode: 'Markdown', reply_markup: null });
             return;
         }
 
@@ -148,6 +140,7 @@ async function bookingConversation(conversation, ctx) {
             { reply_markup: timeKeyboard, parse_mode: 'Markdown' }
         );
 
+        // Ожидаем клик по времени
         clickContext = await conversation.wait();
 
         while (!clickContext.callbackQuery || !clickContext.callbackQuery.data.startsWith('time_')) {
@@ -169,8 +162,10 @@ async function bookingConversation(conversation, ctx) {
             return stmt.run(telegramId, serviceId, fullDateTime);
         });
 
+        // Стираем старые кнопки времени, чтобы интерфейс зафиксировался
         await clickContext.editMessageText(`Вы выбрали время: *${selectedTime}*. Оформляю запись... ⏳`, { parse_mode: 'Markdown', reply_markup: null });
 
+        // МГНОВЕННОЕ УВЕДОМЛЕНИЕ АДМИНИСТРАТОРА
         const adminId = parseInt(process.env.ADMIN_TELEGRAM_ID, 10);
         if (adminId && !isNaN(adminId)) {
             const clientName = ctx.from.first_name;
@@ -192,6 +187,7 @@ async function bookingConversation(conversation, ctx) {
             ).catch((err) => console.error('[Notification Error] Не удалось отправить сообщение админу:', err));
         }
 
+        // Финальный ответ клиенту
         await ctx.reply(
             `🎉 *Вы успешно записаны!* \n\n` +
             `💅 *Услуга:* ${selectedService.name}\n` +
@@ -206,7 +202,4 @@ async function bookingConversation(conversation, ctx) {
     }
 }
 
-// ====================================================================
-// 3. ЭКСПОРТ МОДУЛЯ ДЛЯ ИНТЕГРАЦИИ В INDEX.JS
-// ====================================================================
 module.exports = { bookingConversation };

@@ -11,7 +11,8 @@
     "@grammyjs/conversations": "^2.1.1",
     "better-sqlite3": "^11.0.0",
     "dotenv": "^16.4.5",
-    "grammy": "^1.21.1"
+    "grammy": "^1.21.1",
+    "node-cron": "^4.6.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
