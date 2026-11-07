@@ -1,11 +1,11 @@
-// 1. Все импорты строго на самом верху файла
+// ====================================================================
+// 1. ИМПОРТЫ И НАСТРОЙКА ОКРУЖЕНИЯ
+// ====================================================================
 const { InlineKeyboard } = require('grammy');
 const db = require('../config/database');
 
 /**
  * Вспомогательная функция для получения времени в нужном часовом поясе.
- * Гарантирует правильные даты и валидацию времени независимо от расположения сервера.
- * @param {number} offsetHours - Смещение часового пояса (например, 3 для МСК)
  */
 function getTargetDate(offsetHours = 3) {
     const now = new Date();
@@ -13,14 +13,14 @@ function getTargetDate(offsetHours = 3) {
     return new Date(utc + (3600000 * offsetHours));
 }
 
-/**
- * Пошаговый сценарий записи на услугу (Максимальная коммерческая версия со слотами)
- */
+// ====================================================================
+// 2. ОСНОВНОЙ СЦЕНАРИЙ ПОШАГОВОГО БРОНИРОВАНИЯ (С ЗАЩИТОЙ ОТ ДУБЛЕЙ)
+// ====================================================================
 async function bookingConversation(conversation, ctx) {
     try {
         const telegramId = ctx.from.id;
 
-        // --- ШАГ 1: ВЫБОР УСЛУГИ ---
+        // --- ШАГ 1: ВЫБОР УСЛУГИ И ПРОВЕРКА НА СУЩЕСТВУЮЩУЮ ЗАПИСЬ ---
         const services = await conversation.external(() => {
             return db.prepare('SELECT id, name, price FROM services').all();
         });
@@ -56,7 +56,51 @@ async function bookingConversation(conversation, ctx) {
             return;
         }
 
+        // ПРОВЕРКА ДУБЛЕЙ: Ищем, есть ли у юзера активная запись на ЭТУ услугу
+        const existingApp = await conversation.external(() => {
+            return db.prepare(`
+                SELECT id, appointment_date FROM appointments 
+                WHERE user_id = ? AND service_id = ? AND status IN ('pending', 'confirmed')
+                LIMIT 1
+            `).get(telegramId, serviceId);
+        });
 
+        let isRescheduling = false;
+        let appointmentIdToUpdate = null;
+
+        if (existingApp) {
+            appointmentIdToUpdate = existingApp.id;
+            
+            const [oldRawDate, oldRawTime] = existingApp.appointment_date.split(' ');
+            const oldDisplayDate = oldRawDate.split('-').reverse().join('.');
+
+            const rescheduleKeyboard = new InlineKeyboard()
+                .text('🔄 Да, перенести визит', 'action_reschedule').row()
+                .text('❌ Нет, оставить как есть', 'action_cancel_flow');
+
+            await clickContext.editMessageText(
+                `🗓 <b>У вас уже есть активная запись на услугу "${selectedService.name}":</b>\n` +
+                `📅 Дата: <b>${oldDisplayDate}</b> в <b>${oldRawTime}</b>.\n\n` +
+                `Желаете перенести этот визит на другое время? Новому бронированию будет присвоен статус "В ожидании".`,
+                { reply_markup: rescheduleKeyboard, parse_mode: 'HTML' }
+            );
+
+            let actionContext = await conversation.wait();
+            while (!actionContext.callbackQuery || !['action_reschedule', 'action_cancel_flow'].includes(actionContext.callbackQuery.data)) {
+                await actionContext.reply('Пожалуйста, выберите один из вариантов ниже.');
+                actionContext = await conversation.wait();
+            }
+
+            await actionContext.answerCallbackQuery();
+
+            if (actionContext.callbackQuery.data === 'action_cancel_flow') {
+                await actionContext.editMessageText('👍 Отлично, ваша текущая запись остается в силе. Ждем вас в салоне!', { reply_markup: null });
+                return;
+            }
+
+            isRescheduling = true;
+            clickContext = actionContext;
+        }
         // --- ШАГ 2: ВЫБОР ДАТЫ ---
         const dateKeyboard = new InlineKeyboard();
         const daysOfWeek = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
@@ -72,10 +116,8 @@ async function bookingConversation(conversation, ctx) {
             dateKeyboard.text(`${dayText} (${dayName})`, `date_${formattedDate}`).row();
         }
 
-        await clickContext.editMessageText(
-            `Вы выбрали: *${selectedService.name}*.\n\n📅 Теперь выберите удобный день для визита:`,
-            { reply_markup: dateKeyboard, parse_mode: 'Markdown' }
-        );
+        const step2Text = `Вы выбрали: *${selectedService.name}*.\n\n📅 Теперь выберите новый удобный день для визита:`;
+        await clickContext.editMessageText(step2Text, { reply_markup: dateKeyboard, parse_mode: 'Markdown' });
 
         clickContext = await conversation.wait();
 
@@ -90,8 +132,7 @@ async function bookingConversation(conversation, ctx) {
         const displayDate = selectedDate.split('-').reverse().join('.');
 
 
-        // --- ШАГ 3: ДИНАМИЧЕСКИЙ ВЫБОР ВРЕМЕНИ (СЛОТЫ ВМЕСТО ТЕКСТА) ---
-        // 1. Получаем из БД уже занятые слоты на эту дату
+        // --- ШАГ 3: ДИНАМИЧЕСКИЙ ВЫБОР ВРЕМЕНИ ---
         const bookedAppointments = await conversation.external(() => {
             return db.prepare(`
                 SELECT appointment_date 
@@ -100,47 +141,53 @@ async function bookingConversation(conversation, ctx) {
             `).all(`${selectedDate}%`);
         });
 
-        // Превращаем занятые записи "YYYY-MM-DD HH:MM" в простой массив занятого времени ["14:00", "16:00"]
-        const busySlots = bookedAppointments.map(app => app.appointment_date.split(' ')[1]);
+        const busySlots = bookedAppointments.map(app => {
+            const dateTime = app.appointment_date || '';
+            const splitData = dateTime.split(' ');
+            return splitData[1] || '';
+        });
 
-        // 2. Генерируем стандартный прайс-лист рабочих часов салона
         const allSalonSlots = ['10:00', '11:30', '13:00', '14:30', '16:00', '17:30', '19:00'];
         
         const timeKeyboard = new InlineKeyboard();
         let availableSlotsCount = 0;
 
         const nowTarget = getTargetDate(3);
-        const isToday = selectedDate === nowTarget.toISOString().split('T')[0];
+        const todayStr = nowTarget.toISOString().split('T')[0];
+        const isToday = selectedDate === todayStr;
 
         allSalonSlots.forEach((slotTime) => {
-            // Если этот слот уже занят кем-то в БД — пропускаем его
             if (busySlots.includes(slotTime)) return;
 
-            // Защита от записи "в прошлое", если клиент выбирает день "Сегодня"
             if (isToday) {
                 const [slotHours, slotMinutes] = slotTime.split(':').map(Number);
-                if (slotHours < nowTarget.getHours() || (slotHours === nowTarget.getHours() && slotMinutes <= nowTarget.getMinutes())) {
+                const currentHours = nowTarget.getHours();
+                const currentMinutes = nowTarget.getMinutes();
+
+                if (slotHours < currentHours || (slotHours === currentHours && slotMinutes <= currentMinutes)) {
                     return; 
                 }
             }
 
-            // Добавляем свободное время на клавиатуру (по 3 кнопки в ряд для компактности)
             timeKeyboard.text(slotTime, `time_${slotTime}`);
             availableSlotsCount++;
             if (availableSlotsCount % 3 === 0) timeKeyboard.row();
         });
 
         if (availableSlotsCount === 0) {
-            await clickContext.editMessageText(`😔 К сожалению, на дату *${displayDate}* все свободные места заняты или рабочее время салона вышло. Пожалуйста, начните сначала и выберите другой день.`, { parse_mode: 'Markdown', reply_markup: null });
+            await clickContext.editMessageText(
+                `😔 К сожалению, на выбранную дату (<b>${displayDate}</b>) свободные места закончились или рабочее время салона вышло.\n\n` +
+                `Пожалуйста, начните сначала и выберите другой день.`, 
+                { parse_mode: 'HTML', reply_markup: null }
+            );
             return;
         }
 
         await clickContext.editMessageText(
-            `Отлично, дата выбрана: *${displayDate}* \n\n⏰ Выберите свободное время для визита:`,
+            `Отлично, дата выбрана: *${displayDate}* \n\n⏰ Выберите удобное время для визита:`,
             { reply_markup: timeKeyboard, parse_mode: 'Markdown' }
         );
 
-        // Ожидаем клик по времени
         clickContext = await conversation.wait();
 
         while (!clickContext.callbackQuery || !clickContext.callbackQuery.data.startsWith('time_')) {
@@ -152,49 +199,61 @@ async function bookingConversation(conversation, ctx) {
         const selectedTime = clickContext.callbackQuery.data.replace('time_', '');
 
 
-        // --- ШАГ 4: СОХРАНЕНИЕ В БАЗУ ДАННЫХ И УВЕДОМЛЕНИЕ АДМИНА ---
-        const insertResult = await conversation.external(() => {
-            const stmt = db.prepare(`
-                INSERT INTO appointments (user_id, service_id, appointment_date, status)
-                VALUES (?, ?, ?, 'pending')
-            `);
-            const fullDateTime = `${selectedDate} ${selectedTime}`;
-            return stmt.run(telegramId, serviceId, fullDateTime);
+        // --- ШАГ 4: СОХРАНЕНИЕ / ОБНОВЛЕНИЕ В БАЗЕ ДАННЫХ И УВЕДОМЛЕНИЕ АДМИНА ---
+        let currentRowId = appointmentIdToUpdate;
+        const fullDateTime = `${selectedDate} ${selectedTime}`;
+
+        await conversation.external(() => {
+            if (isRescheduling) {
+                const stmt = db.prepare(`
+                    UPDATE appointments 
+                    SET appointment_date = ?, status = 'pending' 
+                    WHERE id = ?
+                `);
+                return stmt.run(fullDateTime, appointmentIdToUpdate);
+            } else {
+                const stmt = db.prepare(`
+                    INSERT INTO appointments (user_id, service_id, appointment_date, status)
+                    VALUES (?, ?, ?, 'pending')
+                `);
+                const result = stmt.run(telegramId, serviceId, fullDateTime);
+                currentRowId = result.lastInsertRowid;
+                return result;
+            }
         });
 
-        // Стираем старые кнопки времени, чтобы интерфейс зафиксировался
-        await clickContext.editMessageText(`Вы выбрали время: *${selectedTime}*. Оформляю запись... ⏳`, { parse_mode: 'Markdown', reply_markup: null });
+        await clickContext.editMessageText(`Вы выбрали время: *${selectedTime}*. Оформляю изменения... ⏳`, { parse_mode: 'Markdown', reply_markup: null });
 
-        // МГНОВЕННОЕ УВЕДОМЛЕНИЕ АДМИНИСТРАТОРА
         const adminId = parseInt(process.env.ADMIN_TELEGRAM_ID, 10);
         if (adminId && !isNaN(adminId)) {
             const clientName = ctx.from.first_name;
             const clientUser = ctx.from.username ? `@${ctx.from.username}` : 'нет юзернейма';
             
             const quickAdminKeyboard = new InlineKeyboard()
-                .text('✅ Одобрить', `approve_app_${insertResult.lastInsertRowid}`)
-                .text('❌ Отклонить', `reject_app_${insertResult.lastInsertRowid}`);
+                .text('✅ Одобрить', `approve_app_${currentRowId}`)
+                .text('❌ Отклонить', `reject_app_${currentRowId}`);
+
+            const adminNoticeText = isRescheduling 
+                ? `🔄 <b>Запрос на ПЕРЕНЕСЕНИЕ записи!</b>\n\n`
+                : `🔔 <b>Новая заявка на запись!</b>\n\n`;
 
             await ctx.api.sendMessage(
                 adminId,
-                `🔔 <b>Новая заявка на запись!</b>\n\n` +
+                adminNoticeText +
                 `👤 <b>Клиент:</b> ${clientName} (${clientUser})\n` +
                 `💅 <b>Услуга:</b> ${selectedService.name} (${selectedService.price} ₽)\n` +
-                `📅 <b>Дата:</b> ${displayDate}\n` +
-                `⏰ <b>Время:</b> ${selectedTime}\n\n` +
-                `📥 Вы можете подтвердить или отклонить заявку кнопками ниже:`,
+                `📅 <b>Новая дата:</b> ${displayDate}\n` +
+                `⏰ <b>Новое время:</b> ${selectedTime}\n\n` +
+                `📥 Вы можете подтвердить или отклонить изменения кнопками ниже:`,
                 { parse_mode: 'HTML', reply_markup: quickAdminKeyboard }
             ).catch((err) => console.error('[Notification Error] Не удалось отправить сообщение админу:', err));
         }
 
-        // Финальный ответ клиенту
-        await ctx.reply(
-            `🎉 *Вы успешно записаны!* \n\n` +
-            `💅 *Услуга:* ${selectedService.name}\n` +
-            `📅 *Дата и время:* ${displayDate} в ${selectedTime}\n\n` +
-            `Администратор свяжется с вами для подтверждения. Спасибо!`,
-            { parse_mode: 'Markdown' }
-        );
+        const clientFinalText = isRescheduling
+            ? `🎉 *Заявка на перенос успешно отправлена!* \n\n💅 *Услуга:* ${selectedService.name}\n📅 *Новое время:* ${displayDate} в ${selectedTime}\n\nАдминистратор проверит график и подтвердит изменения. Спасибо!`
+            : `🎉 *Вы успешно записаны!* \n\n💅 *Услуга:* ${selectedService.name}\n📅 *Дата и время:* ${displayDate} в ${selectedTime}\n\nАдминистратор свяжется с вами для подтверждения. Спасибо!`;
+
+        await ctx.reply(clientFinalText, { parse_mode: 'Markdown' });
 
     } catch (error) {
         console.error('Ошибка внутри сценария записи:', error);

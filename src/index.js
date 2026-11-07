@@ -52,7 +52,7 @@ bot.command('start', async (ctx) => {
 
     try {
         await UserModel.upsertUser(telegramId, username, firstName);
-        console.log(`[Bot] Пользователь ${firstName} (${telegramId}) успешно обработан in BD.`);
+        console.log(`[Bot] Пользователь ${firstName} (${telegramId}) успешно обработан в БД.`);
         
         const mainMenu = new Keyboard()
             .text('📅 Записаться на услугу')
@@ -120,7 +120,7 @@ bot.hears('🗂 Мои записи', async (ctx) => {
             );
         }
     } catch (error) {
-        console.error('Ошибка при получении записей пользователя:', error);
+        console.error('Ошибка при получить записи:', error);
         await ctx.reply('⚠️ Не удалось загрузить ваши записи. Пожалуйста, попробуйте позже.');
     }
 });
