@@ -150,11 +150,12 @@ bot.hears('🗓 Расписание на сегодня', async (ctx) => {
 
     try {
         // 1. Получаем текущую дату сервера в формате YYYY-MM-DD (с учетом МСК)
-        const nowMsk = getTargetDateTimeString(3);
+        const nowMsk = getTargetDateTimeString(3); // Строка вида: "2026-11-07 22:40"
         
-        // Исправлено: забираем чистую строку даты (индекс 0) из сплита по пробелу
-        const todayDate = nowMsk.split(' ')[0]; 
-        const displayToday = todayDate.split('-').reverse().join('.');
+        // Четко разделяем по пробелу на Дату и Время через массив
+        const parts = nowMsk.split(' ');
+        const todayDate = parts[0]; // Чистая строка: "2026-11-07"
+        const displayToday = todayDate.split('-').reverse().join('.'); // Красивая дата: "07.11.2026"
 
         // 2. Делаем SQL-запрос ко всем подтвержденным записям на сегодня
         const todaySchedule = db.prepare(`
@@ -176,8 +177,8 @@ bot.hears('🗓 Расписание на сегодня', async (ctx) => {
 
         todaySchedule.forEach((app, index) => {
             const dateTime = app.appointment_date || '';
-            // Исправлено: забираем строго время (индекс 1)
-            const rawTime = dateTime.split(' ')[1] || '00:00';
+            const appParts = dateTime.split(' ');
+            const rawTime = appParts[1] || '00:00'; // Чистая строка времени: "HH:MM"
             const clientUser = app.username ? `@${app.username}` : 'нет юзернейма';
             
             reportText += `${index + 1}. 🕒 <b>${rawTime}</b> — <b>${app.service_name}</b>\n`;
@@ -239,7 +240,7 @@ bot.command('admin', async (ctx) => {
         }
     } catch (error) {
         console.error('Ошибка в админ-панели:', error);
-        await ctx.reply('⚠️ Не удалось загрузить панели администратора.');
+        await ctx.reply('⚠️ Не удалось загрузить панель администратора.');
     }
 });
 
