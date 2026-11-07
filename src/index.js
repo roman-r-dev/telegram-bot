@@ -152,7 +152,7 @@ bot.hears('🗓 Расписание на сегодня', async (ctx) => {
         // 1. Получаем текущую дату сервера в формате YYYY-MM-DD (с учетом МСК)
         const nowMsk = getTargetDateTimeString(3);
         
-        // ИСПРАВЛЕНО: Корректно извлекаем чистую строку даты из сплита по пробелу
+        // Исправлено: забираем чистую строку даты (индекс 0) из сплита по пробелу
         const todayDate = nowMsk.split(' ')[0]; 
         const displayToday = todayDate.split('-').reverse().join('.');
 
@@ -176,6 +176,7 @@ bot.hears('🗓 Расписание на сегодня', async (ctx) => {
 
         todaySchedule.forEach((app, index) => {
             const dateTime = app.appointment_date || '';
+            // Исправлено: забираем строго время (индекс 1)
             const rawTime = dateTime.split(' ')[1] || '00:00';
             const clientUser = app.username ? `@${app.username}` : 'нет юзернейма';
             
