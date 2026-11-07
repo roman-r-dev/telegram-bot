@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  beauty_salon_bot:
+    build: .
+    container_name: beauty_salon_bot_container
+    restart: always
+    # ИСПРАВЛЕНИЕ ТАЙМЗОНЫ: Принудительно выставляем Московское время внутри Docker
+    environment:
+      - TZ=Europe/Moscow
+      - NODE_ENV=production
+    env_file:
+      - .env
+    # Монтируем папку с базой данных, чтобы при перезапуске контейнера записи не стирались
+    volumes:
+      - ./src/database:/app/src/database
