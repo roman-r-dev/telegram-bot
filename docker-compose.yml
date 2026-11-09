@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   beauty_salon_bot:
     build: .
@@ -11,6 +9,7 @@ services:
       - NODE_ENV=production
     env_file:
       - .env
-    # Монтируем папку с базой данных, чтобы при перезапуске контейнера записи не стирались
+    # ПРАВИЛЬНОЕ МОНТИРОВАНИЕ: пробрасываем код проекта и полностью изолируем папки библиотек
     volumes:
-      - ./src/database:/app/src/database
+      - .:/app
+      - /app/node_modules
