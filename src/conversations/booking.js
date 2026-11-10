@@ -68,7 +68,7 @@ async function bookingConversation(conversation, ctx) {
                 .text('❌ Нет, оставить как есть', 'action_cancel_flow');
 
             await clickContext.editMessageText(
-                `🗓 <b>У вас уже есть активная запись на услугу "${selectedService.name}":</b>\n` +
+                `🗓 <b>У вас уже есть active запись на услугу "${selectedService.name}":</b>\n` +
                 `📅 Дата: <b>${oldDisplayDate}</b> в <b>${oldRawTime}</b>.\n\n` +
                 `Желаете перенести этот визит на другое время? Новому бронированию будет присвоен статус "В ожидании".`,
                 { reply_markup: rescheduleKeyboard, parse_mode: 'HTML' }
@@ -113,7 +113,7 @@ async function bookingConversation(conversation, ctx) {
             dateKeyboard.text(`${dayText} (${dayName})`, `date_${formattedDate}`).row();
         }
 
-        const step2Text = `Вы выбрали: *${selectedService.name}*.\n\n📅 Теперь выберите новый удобный день для визита:`;
+        const step2Text = `Вы выбрали: *${selectedService.name}*.\n\n📅 Теперь выберите новый удобный день для визита:\n\n\n`;
         await clickContext.editMessageText(step2Text, { reply_markup: dateKeyboard, parse_mode: 'Markdown' });
 
         clickContext = await conversation.wait();
@@ -135,14 +135,13 @@ async function bookingConversation(conversation, ctx) {
             `).all(`${selectedDate}%`);
         });
 
-        const busySlots = bookedAppointments.map(app => {
+        const busySlots = new Set(bookedAppointments.map(app => {
             const dateTime = app.appointment_date || '';
             const splitData = dateTime.split(' ');
             return splitData[1] || '';
-        });
+        }));
 
         const allSalonSlots = ['10:00', '11:30', '13:00', '14:30', '16:00', '17:30', '19:00'];
-        
         const timeKeyboard = new InlineKeyboard();
         let availableSlotsCount = 0;
 
@@ -150,23 +149,23 @@ async function bookingConversation(conversation, ctx) {
         const todayStr = `${nowTarget.getFullYear()}-${String(nowTarget.getMonth() + 1).padStart(2, '0')}-${String(nowTarget.getDate()).padStart(2, '0')}`;
         const isToday = selectedDate === todayStr;
 
-        allSalonSlots.forEach((slotTime) => {
-            if (busySlots.includes(slotTime)) return;
+        const currentHours = nowTarget.getHours();
+        const currentMinutes = nowTarget.getMinutes();
+
+        for (const slotTime of allSalonSlots) {
+            if (busySlots.has(slotTime)) continue;
 
             if (isToday) {
                 const [slotHours, slotMinutes] = slotTime.split(':').map(Number);
-                const currentHours = nowTarget.getHours();
-                const currentMinutes = nowTarget.getMinutes();
-
                 if (slotHours < currentHours || (slotHours === currentHours && slotMinutes <= currentMinutes)) {
-                    return; 
+                    continue; 
                 }
             }
 
             timeKeyboard.text(slotTime, `time_${slotTime}`);
             availableSlotsCount++;
             if (availableSlotsCount % 3 === 0) timeKeyboard.row();
-        });
+        }
 
         if (availableSlotsCount === 0) {
             const mainMenu = new Keyboard().text('📅 Записаться на услугу').text('🗂 Мои записи');
@@ -186,7 +185,7 @@ async function bookingConversation(conversation, ctx) {
         }
 
         await clickContext.editMessageText(
-            `Отлично, дата выбрана: *${displayDate}* \n\n⏰ Выберите удобное время для визита:`,
+            `Отлично, дата выбрана: *${displayDate}* \n\n⏰ Выберите удобное время для визита:\n\n\n`,
             { reply_markup: timeKeyboard, parse_mode: 'Markdown' }
         );
 
