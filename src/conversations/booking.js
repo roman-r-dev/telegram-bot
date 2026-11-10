@@ -1,26 +1,16 @@
-// ====================================================================
-// 1. ИМПОРТЫ И НАСТРОЙКА ОКРУЖЕНИЯ
-// ====================================================================
-const { InlineKeyboard } = require('grammy');
+const { InlineKeyboard, Keyboard } = require('grammy');
 const db = require('../config/database');
 
-/**
- * Вспомогательная функция для получения времени в нужном часовом поясе.
- */
 function getTargetDate(offsetHours = 3) {
     const now = new Date();
     const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
     return new Date(utc + (3600000 * offsetHours));
 }
 
-// ====================================================================
-// 2. ОСНОВНОЙ СЦЕНАРИЙ ПОШАГОВОГО БРОНИРОВАНИЯ (С ЗАЩИТОЙ ОТ ДУБЛЕЙ)
-// ====================================================================
 async function bookingConversation(conversation, ctx) {
     try {
         const telegramId = ctx.from.id;
 
-        // --- ШАГ 1: ВЫБОР УСЛУГИ ---
         const services = await conversation.external(() => {
             return db.prepare('SELECT id, name, price FROM services').all();
         });
@@ -44,7 +34,6 @@ async function bookingConversation(conversation, ctx) {
             clickContext = await conversation.wait();
         }
 
-        // МГНОВЕННО ГАСИМ ЧАСИКИ НА КНОПКЕ УСЛУГИ
         await clickContext.answerCallbackQuery();
 
         const serviceData = clickContext.callbackQuery.data; 
@@ -57,7 +46,6 @@ async function bookingConversation(conversation, ctx) {
             return;
         }
 
-        // ПРОВЕРКА ДУБЛЕЙ
         const existingApp = await conversation.external(() => {
             return db.prepare(`
                 SELECT id, appointment_date FROM appointments 
@@ -92,18 +80,25 @@ async function bookingConversation(conversation, ctx) {
                 actionContext = await conversation.wait();
             }
 
-            // МГНОВЕННО ГАСИМ ЧАСИКИ НА КНОПКЕ ПЕРЕНОСА
             await actionContext.answerCallbackQuery();
 
             if (actionContext.callbackQuery.data === 'action_cancel_flow') {
+                const mainMenu = new Keyboard().text('📅 Записаться на услугу').text('🗂 Мои записи');
+                const currentUserId = String(ctx.from?.id);
+                if (db.prepare("SELECT role FROM users WHERE telegram_id = ?").get(currentUserId)?.role === 'admin' || currentUserId === String(process.env.ADMIN_TELEGRAM_ID)) {
+                    mainMenu.row().text('🗓 Расписание на сегодня');
+                }
+                mainMenu.resized();
+
                 await actionContext.editMessageText('👍 Отлично, ваша текущая запись остается в силе. Ждем вас в салоне!', { reply_markup: null });
+                await ctx.reply('Вы вернулись в главное меню:', { reply_markup: mainMenu });
                 return;
             }
 
             isRescheduling = true;
             clickContext = actionContext;
         }
-        // --- ШАГ 2: ВЫБОР ДАТЫ ---
+
         const dateKeyboard = new InlineKeyboard();
         const daysOfWeek = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
         
@@ -128,15 +123,10 @@ async function bookingConversation(conversation, ctx) {
             clickContext = await conversation.wait();
         }
 
-        // КРИТИЧЕСКОЕУЛУЧШЕНИЕ: Гасим «часики» даты ДО тяжелого запроса к SQLite!
         await clickContext.answerCallbackQuery();
         
         const selectedDate = clickContext.callbackQuery.data.replace('date_', ''); 
         const displayDate = selectedDate.split('-').reverse().join('.');
-
-
-        // --- ШАГ 3: ДИНАМИЧЕСКИЙ ВЫБОР ВРЕМЕНИ ---
-        // Запрос к БД на чтение занятых слотов
         const bookedAppointments = await conversation.external(() => {
             return db.prepare(`
                 SELECT appointment_date 
@@ -157,7 +147,7 @@ async function bookingConversation(conversation, ctx) {
         let availableSlotsCount = 0;
 
         const nowTarget = getTargetDate(3);
-        const todayStr = nowTarget.toISOString().split('T')[0];
+        const todayStr = `${nowTarget.getFullYear()}-${String(nowTarget.getMonth() + 1).padStart(2, '0')}-${String(nowTarget.getDate()).padStart(2, '0')}`;
         const isToday = selectedDate === todayStr;
 
         allSalonSlots.forEach((slotTime) => {
@@ -179,11 +169,19 @@ async function bookingConversation(conversation, ctx) {
         });
 
         if (availableSlotsCount === 0) {
+            const mainMenu = new Keyboard().text('📅 Записаться на услугу').text('🗂 Мои записи');
+            const currentUserId = String(ctx.from?.id);
+            if (db.prepare("SELECT role FROM users WHERE telegram_id = ?").get(currentUserId)?.role === 'admin' || currentUserId === String(process.env.ADMIN_TELEGRAM_ID)) {
+                mainMenu.row().text('🗓 Расписание на сегодня');
+            }
+            mainMenu.resized();
+
             await clickContext.editMessageText(
                 `😔 К сожалению, на выбранную дату (<b>${displayDate}</b>) свободные места закончились или рабочее время салона вышло.\n\n` +
                 `Пожалуйста, начните сначала и выберите другой день.`, 
                 { parse_mode: 'HTML', reply_markup: null }
             );
+            await ctx.reply('Вы вернулись в меню:', { reply_markup: mainMenu });
             return;
         }
 
@@ -199,12 +197,9 @@ async function bookingConversation(conversation, ctx) {
             clickContext = await conversation.wait();
         }
 
-        // КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Гасим «часики» времени ДО сохранения данных в SQLite!
         await clickContext.answerCallbackQuery();
         const selectedTime = clickContext.callbackQuery.data.replace('time_', '');
 
-
-        // --- ШАГ 4: СОХРАНЕНИЕ / ОБНОВЛЕНИЕ В БАЗЕ ДАННЫХ И УВЕДОМЛЕНИЕ АДМИНА ---
         let currentRowId = appointmentIdToUpdate;
         const fullDateTime = `${selectedDate} ${selectedTime}`;
 
@@ -229,7 +224,6 @@ async function bookingConversation(conversation, ctx) {
 
         await clickContext.editMessageText(`Вы выбрали время: *${selectedTime}*. Оформляю изменения... ⏳`, { parse_mode: 'Markdown', reply_markup: null });
 
-        // МГНОВЕННОЕ УВЕДОМЛЕНИЕ АДМИНИСТРАТОРА
         const adminId = parseInt(process.env.ADMIN_TELEGRAM_ID, 10);
         if (adminId && !isNaN(adminId)) {
             const clientName = ctx.from.first_name;
@@ -259,7 +253,15 @@ async function bookingConversation(conversation, ctx) {
             ? `🎉 *Заявка на перенос успешно отправлена!* \n\n💅 *Услуга:* ${selectedService.name}\n📅 *Новое время:* ${displayDate} в ${selectedTime}\n\nАдминистратор проверит график и подтвердит изменения. Спасибо!`
             : `🎉 *Вы успешно записаны!* \n\n💅 *Услуга:* ${selectedService.name}\n📅 *Дата и время:* ${displayDate} в ${selectedTime}\n\nАдминистратор свяжется с вами для подтверждения. Спасибо!`;
 
-        await ctx.reply(clientFinalText, { parse_mode: 'Markdown' });
+        const mainMenu = new Keyboard().text('📅 Записаться на услугу').text('🗂 Мои записи');
+        const currentUserId = String(ctx.from?.id);
+        
+        if (db.prepare("SELECT role FROM users WHERE telegram_id = ?").get(currentUserId)?.role === 'admin' || currentUserId === String(process.env.ADMIN_TELEGRAM_ID)) {
+            mainMenu.row().text('🗓 Расписание на сегодня');
+        }
+        mainMenu.resized();
+
+        await ctx.reply(clientFinalText, { parse_mode: 'Markdown', reply_markup: mainMenu });
 
     } catch (error) {
         console.error('Ошибка внутри сценария записи:', error);
