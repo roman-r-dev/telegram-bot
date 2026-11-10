@@ -7,6 +7,12 @@ function getTargetDate(offsetHours = 3) {
     return new Date(utc + (3600000 * offsetHours));
 }
 
+async function removeButtons(ctx, message) {
+    if (message) {
+        await ctx.api.editMessageReplyMarkup(message.chat.id, message.message_id, { reply_markup: null }).catch(() => {});
+    }
+}
+
 async function bookingConversation(conversation, ctx) {
     try {
         const telegramId = ctx.from.id;
@@ -25,7 +31,7 @@ async function bookingConversation(conversation, ctx) {
             keyboard.text(`${service.name} (${service.price}₽)`, `service_${service.id}`).row();
         });
 
-        const initialMessage = await ctx.reply('✨ Выберите желаемую услугу из списка:', { reply_markup: keyboard });
+        let currentMessage = await ctx.reply('✨ Выберите желаемую услугу из списка:', { reply_markup: keyboard });
 
         let clickContext = await conversation.wait();
 
@@ -35,13 +41,13 @@ async function bookingConversation(conversation, ctx) {
         }
 
         await clickContext.answerCallbackQuery();
+        await removeButtons(ctx, currentMessage);
 
         const serviceData = clickContext.callbackQuery.data; 
         const serviceId = parseInt(serviceData.replace('service_', ''), 10); 
         const selectedService = services.find(s => s.id === serviceId);
 
         if (!selectedService) {
-            await ctx.api.editMessageReplyMarkup(initialMessage.chat.id, initialMessage.message_id, { reply_markup: null });
             await clickContext.reply('⚠️ Данная услуга более недоступна. Пожалуйста, начните запись сначала с помощью команды /start.');
             return;
         }
@@ -67,8 +73,8 @@ async function bookingConversation(conversation, ctx) {
                 .text('🔄 Да, перенести визит', 'action_reschedule').row()
                 .text('❌ Нет, оставить как есть', 'action_cancel_flow');
 
-            await clickContext.editMessageText(
-                `🗓 <b>У вас уже есть active запись на услугу "${selectedService.name}":</b>\n` +
+            currentMessage = await clickContext.reply(
+                `🗓 <b>У вас уже есть активная запись на услугу "${selectedService.name}":</b>\n` +
                 `📅 Дата: <b>${oldDisplayDate}</b> в <b>${oldRawTime}</b>.\n\n` +
                 `Желаете перенести этот визит на другое время? Новому бронированию будет присвоен статус "В ожидании".`,
                 { reply_markup: rescheduleKeyboard, parse_mode: 'HTML' }
@@ -81,6 +87,7 @@ async function bookingConversation(conversation, ctx) {
             }
 
             await actionContext.answerCallbackQuery();
+            await removeButtons(ctx, currentMessage);
 
             if (actionContext.callbackQuery.data === 'action_cancel_flow') {
                 const mainMenu = new Keyboard().text('📅 Записаться на услугу').text('🗂 Мои записи');
@@ -90,7 +97,7 @@ async function bookingConversation(conversation, ctx) {
                 }
                 mainMenu.resized();
 
-                await actionContext.editMessageText('👍 Отлично, ваша текущая запись остается в силе. Ждем вас в салоне!', { reply_markup: null });
+                await actionContext.reply('👍 Отлично, ваша текущая запись остается в силе. Ждем вас в салоне!');
                 await ctx.reply('Вы вернулись в главное меню:', { reply_markup: mainMenu });
                 return;
             }
@@ -113,8 +120,8 @@ async function bookingConversation(conversation, ctx) {
             dateKeyboard.text(`${dayText} (${dayName})`, `date_${formattedDate}`).row();
         }
 
-        const step2Text = `Вы выбрали: *${selectedService.name}*.\n\n📅 Теперь выберите новый удобный день для визита:\n\n\n`;
-        await clickContext.editMessageText(step2Text, { reply_markup: dateKeyboard, parse_mode: 'Markdown' });
+        const step2Text = `Вы выбрали: *${selectedService.name}*.\n\n📅 Теперь выберите удобный день для визита:`;
+        currentMessage = await clickContext.reply(step2Text, { reply_markup: dateKeyboard, parse_mode: 'Markdown' });
 
         clickContext = await conversation.wait();
 
@@ -124,6 +131,7 @@ async function bookingConversation(conversation, ctx) {
         }
 
         await clickContext.answerCallbackQuery();
+        await removeButtons(ctx, currentMessage);
         
         const selectedDate = clickContext.callbackQuery.data.replace('date_', ''); 
         const displayDate = selectedDate.split('-').reverse().join('.');
@@ -175,17 +183,17 @@ async function bookingConversation(conversation, ctx) {
             }
             mainMenu.resized();
 
-            await clickContext.editMessageText(
+            await clickContext.reply(
                 `😔 К сожалению, на выбранную дату (<b>${displayDate}</b>) свободные места закончились или рабочее время салона вышло.\n\n` +
                 `Пожалуйста, начните сначала и выберите другой день.`, 
-                { parse_mode: 'HTML', reply_markup: null }
+                { parse_mode: 'HTML' }
             );
             await ctx.reply('Вы вернулись в меню:', { reply_markup: mainMenu });
             return;
         }
 
-        await clickContext.editMessageText(
-            `Отлично, дата выбрана: *${displayDate}* \n\n⏰ Выберите удобное время для визита:\n\n\n`,
+        currentMessage = await clickContext.reply(
+            `Отлично, дата выбрана: *${displayDate}* \n\n⏰ Выберите удобное время для визита:`,
             { reply_markup: timeKeyboard, parse_mode: 'Markdown' }
         );
 
@@ -197,6 +205,8 @@ async function bookingConversation(conversation, ctx) {
         }
 
         await clickContext.answerCallbackQuery();
+        await removeButtons(ctx, currentMessage);
+        
         const selectedTime = clickContext.callbackQuery.data.replace('time_', '');
 
         let currentRowId = appointmentIdToUpdate;
@@ -221,7 +231,7 @@ async function bookingConversation(conversation, ctx) {
             }
         });
 
-        await clickContext.editMessageText(`Вы выбрали время: *${selectedTime}*. Оформляю изменения... ⏳`, { parse_mode: 'Markdown', reply_markup: null });
+        await clickContext.reply(`Вы выбрали время: *${selectedTime}*. Оформляю изменения... ⏳`, { parse_mode: 'Markdown' });
 
         const adminId = parseInt(process.env.ADMIN_TELEGRAM_ID, 10);
         if (adminId && !isNaN(adminId)) {
@@ -269,3 +279,4 @@ async function bookingConversation(conversation, ctx) {
 }
 
 module.exports = { bookingConversation };
+
