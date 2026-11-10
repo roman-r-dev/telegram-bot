@@ -1,7 +1,6 @@
 const db = require('../config/database');
 
 function initDatabase() {
-    // 1. Таблица пользователей
     db.prepare(`
         CREATE TABLE IF NOT EXISTS users (
             telegram_id INTEGER PRIMARY KEY,
@@ -13,7 +12,6 @@ function initDatabase() {
         )
     `).run();
 
-    // 2. Таблица услуг
     db.prepare(`
         CREATE TABLE IF NOT EXISTS services (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,7 +21,6 @@ function initDatabase() {
         )
     `).run();
 
-    // 3. Таблица мастеров
     db.prepare(`
         CREATE TABLE IF NOT EXISTS masters (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,16 +29,15 @@ function initDatabase() {
         )
     `).run();
 
-    // 4. Таблица записей (Синхронизирована с индекс-модулем)
     db.prepare(`
         CREATE TABLE IF NOT EXISTS appointments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             service_id INTEGER,
             master_id INTEGER,
-            appointment_date TEXT NOT NULL, -- Формат: YYYY-MM-DD HH:MM (Объединено для работы Крона и админки)
+            appointment_date TEXT NOT NULL,
             status TEXT DEFAULT 'pending',
-            reminder_sent INTEGER DEFAULT 0, -- Защита от спама напоминаниями
+            reminder_sent INTEGER DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (telegram_id) ON DELETE CASCADE,
             FOREIGN KEY (service_id) REFERENCES services (id) ON DELETE CASCADE,
@@ -49,7 +45,6 @@ function initDatabase() {
         )
     `).run();
 
-    // Заполнение базовыми услугами
     const countServices = db.prepare('SELECT COUNT(*) as count FROM services').get();
     if (countServices.count === 0) {
         const insertService = db.prepare('INSERT INTO services (name, price, duration) VALUES (?, ?, ?)');
@@ -65,10 +60,9 @@ function initDatabase() {
             { name: 'Маникюр с покрытием', price: 1800, duration: '1.5 часа' },
             { name: 'Уход за бородой', price: 800, duration: '30 мин' }
         ]);
-        console.log('[Database] Тестовые услуги добавлены в прайс-лист!');
+        console.log('[Database] Сервисы инициализированы.');
     }
 
-    // Заполнение базовыми мастерами
     const countMasters = db.prepare('SELECT COUNT(*) as count FROM masters').get();
     if (countMasters.count === 0) {
         const insertMaster = db.prepare('INSERT INTO masters (name, specialty) VALUES (?, ?)');
@@ -83,10 +77,19 @@ function initDatabase() {
             { name: 'Мария', specialty: 'Стилист' },
             { name: 'Елена', specialty: 'Мастер маникюра' }
         ]);
-        console.log('[Database] Тестовые мастера добавлены!');
+        console.log('[Database] Мастера инициализированы.');
     }
 
-    console.log('[Database] Все таблицы проверены, синхронизированы и готовы к работе.');
+    try {
+        db.prepare("ALTER TABLE appointments ADD COLUMN reminder_sent INTEGER DEFAULT 0").run();
+        console.log('[Database] Структура таблиц обновлена.');
+    } catch (err) {
+        if (!err.message.includes('duplicate column name')) {
+            console.error('Ошибка миграции БД:', err.message);
+        }
+    }
+
+    console.log('[Database] База данных готова к работе.');
 }
 
 const UserModel = {
@@ -98,7 +101,6 @@ const UserModel = {
                 username = excluded.username,
                 first_name = excluded.first_name
         `);
-        // Принудительно приводим к BigInt или оставляем как есть, лучше использовать строки в будущем
         return query.run(telegramId, username, firstName);
     }
 };
