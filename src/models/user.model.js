@@ -32,16 +32,16 @@ function initDatabase() {
         )
     `).run();
 
-    // 4. Таблица записей (Добавили master_id)
+    // 4. Таблица записей (Синхронизирована с индекс-модулем)
     db.prepare(`
         CREATE TABLE IF NOT EXISTS appointments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             service_id INTEGER,
             master_id INTEGER,
-            appointment_date TEXT NOT NULL, -- Формат: YYYY-MM-DD
-            appointment_time TEXT NOT NULL, -- Формат: HH:MM
+            appointment_date TEXT NOT NULL, -- Формат: YYYY-MM-DD HH:MM (Объединено для работы Крона и админки)
             status TEXT DEFAULT 'pending',
+            reminder_sent INTEGER DEFAULT 0, -- Защита от спама напоминаниями
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (telegram_id) ON DELETE CASCADE,
             FOREIGN KEY (service_id) REFERENCES services (id) ON DELETE CASCADE,
@@ -86,7 +86,7 @@ function initDatabase() {
         console.log('[Database] Тестовые мастера добавлены!');
     }
 
-    console.log('[Database] Все таблицы проверены и готовы к работе.');
+    console.log('[Database] Все таблицы проверены, синхронизированы и готовы к работе.');
 }
 
 const UserModel = {
@@ -98,6 +98,7 @@ const UserModel = {
                 username = excluded.username,
                 first_name = excluded.first_name
         `);
+        // Принудительно приводим к BigInt или оставляем как есть, лучше использовать строки в будущем
         return query.run(telegramId, username, firstName);
     }
 };
