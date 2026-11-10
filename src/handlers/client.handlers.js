@@ -37,7 +37,7 @@ function registerClientHandlers(bot, helpers) {
     });
 
     bot.hears('📅 Записаться на услугу', async (ctx) => {
-        await ctx.reply('Переходим к оформлению записи...', { reply_markup: new ReplyKeyboardRemove() });
+        await ctx.reply('Переходим к оформлению записи...', { reply_markup: ReplyKeyboardRemove() });
         await ctx.conversation.enter('bookingConversation');
     });
 
