@@ -2,22 +2,27 @@ const cron = require('node-cron');
 const db = require('../config/database');
 
 function setupCronJobs(bot, helpers) {
+    let isRunning = false;
+
+    const formatMsk = (ms) => {
+        const utc = ms + (new Date().getTimezoneOffset() * 60000);
+        const d = new Date(utc + (3600000 * 3));
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        const hours = String(d.getHours()).padStart(2, '0');
+        const minutes = String(d.getMinutes()).padStart(2, '0');
+        return `${year}-${month}-${day} ${hours}:${minutes}:00`;
+    };
+
     cron.schedule('* * * * *', async () => {
+        if (isRunning) return;
+        isRunning = true;
+
         try {
-            const currentMskTime = helpers.getTargetDateTimeString(3);
-            const isoString = currentMskTime.replace(' ', 'T');
-            const mskDate = new Date(isoString);
-
-            if (isNaN(mskDate.getTime())) {
-                return;
-            }
-
-            const targetStart = new Date(mskDate.getTime() + (2 * 3600 * 1000) - 60000);
-            const targetEnd = new Date(mskDate.getTime() + (2 * 3600 * 1000) + 60000);
-
-            const toDbFormat = (d) => {
-                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
-            };
+            const nowMs = Date.now();
+            const targetStart = formatMsk(nowMs + (2 * 3600 * 1000) - 60000);
+            const targetEnd = formatMsk(nowMs + (2 * 3600 * 1000) + 60000);
 
             const reminders = db.prepare(`
                 SELECT a.id, a.user_id AS userId, a.appointment_date AS appointmentDate, s.name AS serviceName 
@@ -27,12 +32,16 @@ function setupCronJobs(bot, helpers) {
                   AND a.appointment_date <= ?  
                   AND a.status = 'confirmed'  
                   AND a.reminder_sent = 0
-            `).all(toDbFormat(targetStart), toDbFormat(targetEnd));
+            `).all(targetStart, targetEnd);
 
             for (const app of reminders) {
                 const formattedTime = helpers.extractTime(app.appointmentDate);
 
-                db.prepare("UPDATE appointments SET reminder_sent = 1 WHERE id = ?").run(app.id);
+                const result = db.prepare(
+                    "UPDATE appointments SET reminder_sent = 1 WHERE id = ? AND reminder_sent = 0"
+                ).run(app.id);
+
+                if (result.changes === 0) continue;
 
                 await bot.api.sendMessage(
                     String(app.userId),
@@ -47,6 +56,8 @@ function setupCronJobs(bot, helpers) {
             }
         } catch (error) {
             console.error('Ошибка планировщика:', error);
+        } finally {
+            isRunning = false;
         }
     });
 

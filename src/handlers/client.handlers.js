@@ -1,16 +1,18 @@
-const { Keyboard, InlineKeyboard, ReplyKeyboardRemove } = require('grammy');
+const { Keyboard, InlineKeyboard } = require('grammy');
 const db = require('../config/database');
 const { UserModel } = require('../models/user.model');
 
 function registerClientHandlers(bot, helpers) {
     bot.command('start', async (ctx) => {
-        await ctx.conversation.exit();
-        
         const telegramId = String(ctx.from.id);
         const username = ctx.from.username || null;
         const firstName = ctx.from.first_name;
 
         try {
+            if (ctx.conversation) {
+                await ctx.conversation.exit();
+            }
+
             await UserModel.upsertUser(telegramId, username, firstName);
             console.log(`[Bot] Пользователь ${firstName} (${telegramId}) обработан.`);
             
@@ -19,7 +21,8 @@ function registerClientHandlers(bot, helpers) {
                 .text('🗂 Мои записи');
                 
             const adminId = String(process.env.ADMIN_TELEGRAM_ID);
-            if (String(ctx.from?.id) === adminId) {
+            const userRecord = db.prepare("SELECT role FROM users WHERE telegram_id = ?").get(telegramId);
+            if (telegramId === adminId || userRecord?.role === 'admin') {
                 mainMenu.row().text('🗓 Расписание на сегодня');
             }
 
@@ -28,7 +31,7 @@ function registerClientHandlers(bot, helpers) {
             await ctx.reply(
                 `Привет, ${helpers.escapeHtml(firstName)}! Добро пожаловать в наш Салон Красоты. ✨\n\n` +
                 `Вы можете записаться на процедуру или проверить свои визиты кнопками ниже:`, 
-                { reply_markup: mainMenu }
+                { reply_markup: mainMenu, parse_mode: 'HTML' }
             );
         } catch (error) {
             console.error('Ошибка при сохранении пользователя в БД:', error);
@@ -37,7 +40,7 @@ function registerClientHandlers(bot, helpers) {
     });
 
     bot.hears('📅 Записаться на услугу', async (ctx) => {
-        await ctx.reply('Переходим к оформлению записи...', { reply_markup: {remove_keyboard: true}});
+        await ctx.reply('Переходим к оформлению записи...', { reply_markup: { remove_keyboard: true } });
         await ctx.conversation.enter('bookingConversation');
     });
 
@@ -95,14 +98,39 @@ function registerClientHandlers(bot, helpers) {
         const userId = String(ctx.from.id);
 
         try {
-            const result = db.prepare("UPDATE appointments SET status = 'cancelled' WHERE id = ? AND CAST(user_id AS TEXT) = ?").run(appId, userId);
-            
-            if (result.changes === 0) {
-                return await ctx.answerCallbackQuery('Запись не найдена или у вас нет прав на отмену.').catch(() => {});
+            const app = db.prepare(`
+                SELECT a.status, a.appointment_date AS appointmentDate, s.name AS serviceName 
+                FROM appointments a
+                JOIN services s ON a.service_id = s.id
+                WHERE a.id = ? AND CAST(a.user_id AS TEXT) = ?
+            `).get(appId, userId);
+
+            if (!app || app.status === 'cancelled') {
+                return await ctx.answerCallbackQuery('Запись уже отменена или не найдена.').catch(() => {});
             }
 
+            db.prepare("UPDATE appointments SET status = 'cancelled' WHERE id = ?").run(appId);
+
             await ctx.answerCallbackQuery('Запись успешно отменена!').catch(() => {});
-            await ctx.editMessageText(ctx.callbackQuery.message.text + '\n\n🛑 Вы отменили этот визит.').catch(() => {});
+            await ctx.editMessageText(
+                `${ctx.callbackQuery.message.text}\n\n🛑 Вы отменили этот визит.`,
+                { reply_markup: { inline_keyboard: [] } }
+            ).catch(() => {});
+
+            if (app.status === 'confirmed' && process.env.ADMIN_TELEGRAM_ID) {
+                const formattedDate = helpers.formatDate(app.appointmentDate);
+                const formattedTime = helpers.extractTime(app.appointmentDate);
+                const clientName = helpers.escapeHtml(ctx.from.first_name || 'Клиент');
+
+                await bot.api.sendMessage(
+                    String(process.env.ADMIN_TELEGRAM_ID),
+                    `⚠️ <b>Клиент отменил подтверждённую запись!</b>\n\n` +
+                    `👤 <b>Клиент:</b> ${clientName}\n` +
+                    `💅 <b>Услуга:</b> ${helpers.escapeHtml(app.serviceName)}\n` +
+                    `📅 <b>Дата:</b> ${formattedDate} в ${formattedTime}`,
+                    { parse_mode: 'HTML' }
+                ).catch(() => {});
+            }
         } catch (error) {
             console.error('Ошибка при отмене записи в БД:', error);
             await ctx.answerCallbackQuery('Не удалось отменить запись.').catch(() => {});

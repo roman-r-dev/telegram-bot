@@ -5,7 +5,11 @@ function registerAdminHandlers(bot, helpers) {
     const adminId = String(process.env.ADMIN_TELEGRAM_ID);
 
     function isAdmin(ctx) {
-        return String(ctx.from?.id) === adminId;
+        const userId = String(ctx.from?.id || '');
+        if (!userId) return false;
+        if (userId === adminId) return true;
+        const user = db.prepare("SELECT role FROM users WHERE telegram_id = ?").get(userId);
+        return user?.role === 'admin';
     }
 
     bot.hears('🗓 Расписание на сегодня', async (ctx) => {
@@ -100,13 +104,28 @@ function registerAdminHandlers(bot, helpers) {
         const appId = parseInt(ctx.callbackQuery.data.replace('approve_app_', ''), 10);
 
         try {
-            const app = db.prepare('SELECT user_id AS userId, appointment_date AS appointmentDate FROM appointments WHERE id = ?').get(appId);
-            db.prepare("UPDATE appointments SET status = 'confirmed' WHERE id = ?").run(appId);
+            const app = db.prepare('SELECT user_id AS userId, appointment_date AS appointmentDate, status FROM appointments WHERE id = ?').get(appId);
+            if (!app) {
+                return await ctx.answerCallbackQuery({ text: 'Запись не найдена.', show_alert: true });
+            }
+
+            if (app.status !== 'pending') {
+                await ctx.editMessageText(
+                    `${ctx.callbackQuery.message.text}\n\nℹ️ Статус записи уже был изменен (${app.status}).`,
+                    { reply_markup: { inline_keyboard: [] } }
+                ).catch(() => {});
+                return await ctx.answerCallbackQuery('Заявка уже обработана');
+            }
+
+            db.prepare("UPDATE appointments SET status = 'confirmed' WHERE id = ? AND status = 'pending'").run(appId);
 
             await ctx.answerCallbackQuery('Запись одобрена').catch(() => {});
-            await ctx.editMessageText(ctx.callbackQuery.message.text + '\n\n✅ Запись успешно подтверждена.').catch(() => {});
+            await ctx.editMessageText(
+                `${ctx.callbackQuery.message.text}\n\n✅ Запись успешно подтверждена.`,
+                { reply_markup: { inline_keyboard: [] } }
+            ).catch(() => {});
 
-            if (app && app.appointmentDate) {
+            if (app.appointmentDate) {
                 const formattedDate = helpers.formatDate(app.appointmentDate);
                 const formattedTime = helpers.extractTime(app.appointmentDate);
 
@@ -127,18 +146,31 @@ function registerAdminHandlers(bot, helpers) {
         const appId = parseInt(ctx.callbackQuery.data.replace('reject_app_', ''), 10);
 
         try {
-            const app = db.prepare('SELECT user_id AS userId FROM appointments WHERE id = ?').get(appId);
-            db.prepare("UPDATE appointments SET status = 'cancelled' WHERE id = ?").run(appId);
+            const app = db.prepare('SELECT user_id AS userId, status FROM appointments WHERE id = ?').get(appId);
+            if (!app) {
+                return await ctx.answerCallbackQuery({ text: 'Запись не найдена.', show_alert: true });
+            }
+
+            if (app.status !== 'pending') {
+                await ctx.editMessageText(
+                    `${ctx.callbackQuery.message.text}\n\nℹ️ Статус записи уже был изменен (${app.status}).`,
+                    { reply_markup: { inline_keyboard: [] } }
+                ).catch(() => {});
+                return await ctx.answerCallbackQuery('Заявка уже обработана');
+            }
+
+            db.prepare("UPDATE appointments SET status = 'cancelled' WHERE id = ? AND status = 'pending'").run(appId);
 
             await ctx.answerCallbackQuery('Запись отклонена').catch(() => {});
-            await ctx.editMessageText(ctx.callbackQuery.message.text + '\n\n❌ Запись отклонена администратором.').catch(() => {});
+            await ctx.editMessageText(
+                `${ctx.callbackQuery.message.text}\n\n❌ Запись отклонена администратором.`,
+                { reply_markup: { inline_keyboard: [] } }
+            ).catch(() => {});
 
-            if (app) {
-                await bot.api.sendMessage(
-                    String(app.userId),
-                    `⚠️ К сожалению, ваша заявка на запись была отклонена администратором.`
-                ).catch(() => {});
-            }
+            await bot.api.sendMessage(
+                String(app.userId),
+                `⚠️ К сожалению, ваша заявка на запись была отклонена администратором.`
+            ).catch(() => {});
         } catch (error) {
             console.error(error);
             await ctx.answerCallbackQuery('Ошибка БД');
