@@ -3,13 +3,11 @@ services:
     build: .
     container_name: beauty_salon_bot_container
     restart: always
-    # ИСПРАВЛЕНИЕ ТАЙМЗОНЫ: Принудительно выставляем Московское время внутри Docker
     environment:
       - TZ=Europe/Moscow
       - NODE_ENV=production
     env_file:
       - .env
-    # ПРАВИЛЬНОЕ МОНТИРОВАНИЕ: пробрасываем код проекта и полностью изолируем папки библиотек
     volumes:
       - .:/app
       - /app/node_modules
